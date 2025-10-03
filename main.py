@@ -2,120 +2,100 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-
-def pixel_sort(image, threshold=100, direction='horizontal'):
-    """
-    이미지의 특정 부분을 픽셀 소팅합니다.
-
-    Args:
-        image: 픽셀 소팅을 적용할 이미지 영역 (ROI)
-        threshold: 픽셀 소팅을 시작할 밝기 임계값 (0-255)
-        direction: 'horizontal' 또는 'vertical'
-    """
-    if image is None or image.size == 0:
-        return image
-
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    if direction == 'horizontal':
-        # 가로 방향으로 소팅
-        for y in range(image.shape[0]):
-            row = image[y, :]
-            gray_row = gray[y, :]
-
-            start_index = -1
-            # 임계값을 넘는 첫 픽셀 찾기
-            for x in range(image.shape[1]):
-                if gray_row[x] > threshold:
-                    start_index = x
-                    break
-
-            if start_index != -1:
-                # 소팅할 부분 추출
-                sort_part = row[start_index:]
-                # 밝기 값을 기준으로 픽셀 정렬
-                # zip으로 픽셀과 밝기 값을 묶고, 밝기 값으로 정렬 후 다시 픽셀만 추출
-                sorted_pixels = [pixel for pixel, brightness in
-                                 sorted(zip(sort_part, gray_row[start_index:]), key=lambda item: item[1])]
-
-                # 정렬된 픽셀을 다시 이미지에 적용
-                image[y, start_index:] = sorted_pixels
-
-    # (필요시 'vertical' 방향도 유사하게 구현 가능)
-
-    return image
-
-
-# --- MediaPipe 초기화 ---
+# MediaPipe Hands 모델 초기화
 mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(
-    max_num_hands=1,  # 한 개의 손만 인식하여 성능 최적화
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.7)
 mp_drawing = mp.solutions.drawing_utils
 
-# --- 웹캠 설정 ---
+# Hands 객체 생성
+# - min_detection_confidence: 손 인식이 성공했다고 판단하는 최소 신뢰도
+# - min_tracking_confidence: 손 추적이 성공했다고 판단하는 최소 신뢰도
+hands = mp_hands.Hands(
+    max_num_hands=2,
+    min_detection_confidence=0.7,
+    min_tracking_confidence=0.7)
+
+# 웹캠 열기
 cap = cv2.VideoCapture(0)
 
 while cap.isOpened():
     success, image = cap.read()
     if not success:
+        print("웹캠을 찾을 수 없습니다.")
         break
 
-    # 성능 향상을 위해 이미지 쓰기 불가로 설정
-    image.flags.setflags(write=False)
+    # 성능 향상을 위해 이미지를 읽기 전용으로 만들고, BGR을 RGB로 변환
     image = cv2.cvtColor(cv2.flip(image, 1), cv2.COLOR_BGR2RGB)
-
-    # 손 인식
+    image.flags.writeable = False
     results = hands.process(image)
 
-    # 원본 이미지를 다시 쓰기 가능하게 하고 BGR로 변환
-    image.flags.setflags(write=True)
+    # 다시 BGR로 변환하여 화면에 출력할 준비
+    image.flags.writeable = True
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
-    # 랜드마크 그리기 및 픽셀 소팅 적용
-    if results.multi_hand_landmarks:
+    # 손이 2개 인식되었을 때만 로직 실행
+    if results.multi_hand_landmarks and len(results.multi_hand_landmarks) == 2:
+
+        points = []
         for hand_landmarks in results.multi_hand_landmarks:
-            # 1. 검지손가락 끝 랜드마크(ID: 8) 좌표 얻기
-            index_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
-
-            # 랜드마크 좌표는 0~1 사이의 정규화된 값이므로, 이미지 크기에 맞춰 변환
-            h, w, _ = image.shape
-            cx, cy = int(index_finger_tip.x * w), int(index_finger_tip.y * h)
-
-            # 2. 픽셀 소팅을 적용할 영역(ROI) 지정
-            # 검지손가락 끝의 오른쪽 영역에 효과 적용
-            roi_x_start = cx
-            roi_y_start = cy - 10  # 손가락 위아래로 약간의 두께
-            roi_x_end = w  # 화면 끝까지
-            roi_y_end = cy + 10
-
-            # 3. ROI가 이미지 경계를 벗어나지 않도록 처리
-            roi_y_start = max(0, roi_y_start)
-            roi_y_end = min(h, roi_y_end)
-            roi_x_start = max(0, roi_x_start)
-
-            if roi_y_start < roi_y_end and roi_x_start < roi_x_end:
-                # 4. ROI 이미지 잘라내기
-                roi = image[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
-
-                # 5. 픽셀 소팅 함수 호출
-                sorted_roi = pixel_sort(roi.copy(), threshold=120)
-
-                # 6. 원본 이미지에 효과가 적용된 ROI 붙여넣기
-                image[roi_y_start:roi_y_end, roi_x_start:roi_x_end] = sorted_roi
-
-            # 손 관절 그리기 (효과 위에 덧그림)
+            # 랜드마크 그리기 (시각화용)
             mp_drawing.draw_landmarks(
                 image,
                 hand_landmarks,
                 mp_hands.HAND_CONNECTIONS)
 
-    cv2.imshow('Hand Pixel Sorting', image)
+            # 이미지의 너비와 높이
+            h, w, _ = image.shape
 
-    if cv2.waitKey(5) & 0xFF == 27:  # ESC 키 누르면 종료
+            # 엄지 끝(THUMB_TIP, 4)과 검지 끝(INDEX_FINGER_TIP, 8)의 좌표를 리스트에 추가
+            thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+            index_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+
+            points.append((int(thumb_tip.x * w), int(thumb_tip.y * h)))
+            points.append((int(index_finger_tip.x * w), int(index_finger_tip.y * h)))
+
+        # 4개의 점이 모두 수집되었을 경우
+        if len(points) == 4:
+            # np.array로 변환하여 x, y 좌표의 최소/최대값 찾기
+            pts = np.array(points, dtype=np.int32)
+            x_coords = pts[:, 0]
+            y_coords = pts[:, 1]
+
+            x1, x2 = np.min(x_coords), np.max(x_coords)
+            y1, y2 = np.min(y_coords), np.max(y_coords)
+
+            # ROI 영역이 유효한지 확인 (너비와 높이가 0보다 큰지)
+            if x2 > x1 and y2 > y1:
+                # 1. ROI(관심 영역) 추출
+                roi = image[y1:y2, x1:x2]
+
+                # 2. ROI에 필터 적용 (예: 가우시안 블러)
+                # ksize의 값은 홀수여야 함
+                # blurred_roi = cv2.GaussianBlur(roi, (51, 51), 0)
+
+                # --- 다른 필터 예시 ---
+                # 흑백 필터
+                gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                blurred_roi = cv2.cvtColor(gray_roi, cv2.COLOR_GRAY2BGR) # 다시 3채널로 변경해야 함
+
+                # 캐니 엣지 필터
+                # canny_roi = cv2.Canny(roi, 100, 200)
+                # blurred_roi = cv2.cvtColor(canny_roi, cv2.COLOR_GRAY2BGR) # 다시 3채널로 변경해야 함
+                # -------------------------
+
+                # 3. 필터 적용된 ROI를 원본 이미지에 다시 삽입
+                image[y1:y2, x1:x2] = blurred_roi
+
+                # 생성된 사각형 테두리 그리기 (시각화용)
+                cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    # 결과 화면 출력
+    cv2.imshow('Hand Filter Example', image)
+
+    # ESC 키를 누르면 종료
+    if cv2.waitKey(5) & 0xFF == 27:
         break
 
+# 자원 해제
 hands.close()
 cap.release()
 cv2.destroyAllWindows()
