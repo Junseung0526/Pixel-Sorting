@@ -1,2 +1,6 @@
 .idea
 .venv
+.env
+.gitignore
+
+algori.py
